@@ -1,229 +1,234 @@
-// assets/js/auth.js
-class OrionAuth {
-    constructor() {
-        this.SESSION_KEY = 'orion_session';
-        this.SESSION_DURATION = 8 * 60 * 60 * 1000; // 8 horas em milissegundos
+/**
+ * ORION PDV - Sistema de Autenticação
+ * 
+ * Este módulo fornece funções para:
+ * - Login/logout de usuários
+ * - Verificação de autenticação
+ * - Gerenciamento de sessão
+ * - Funções de hash para senhas
+ */
+
+const auth = (function() {
+    
+    /**
+     * Gera um hash seguro para senhas usando CryptoJS
+     * @param {string} senha Senha em texto puro
+     * @returns {string} Hash da senha
+     */
+    function hashSenha(senha) {
+        // Usar CryptoJS para gerar hash SHA-256
+        return CryptoJS.SHA256(senha).toString();
     }
-
-    // Login de usuário
-    login(username, password) {
-        // Verificar se os dados foram fornecidos
-        if (!username || !password) {
-            return {
-                sucesso: false,
-                mensagem: 'Usuário e senha são obrigatórios'
+    
+    /**
+     * Inicializa o sistema de autenticação
+     * Cria usuário administrador padrão se não existir
+     */
+    function inicializarAuth() {
+        // Verificar se já existem usuários
+        const usuariosJson = localStorage.getItem('orion_usuarios');
+        
+        if (!usuariosJson || JSON.parse(usuariosJson).length === 0) {
+            // Criar usuário administrador padrão
+            const usuarioPadrao = {
+                username: 'admin',
+                nome: 'Administrador',
+                cargo: 'Administrador',
+                email: 'admin@orionpdv.com',
+                perfil: 'admin',
+                senha_hash: hashSenha('admin')
             };
+            
+            // Salvar no localStorage
+            localStorage.setItem('orion_usuarios', JSON.stringify({ 
+                'admin': usuarioPadrao 
+            }));
         }
-
-        // Obter usuário do banco de dados
-        const db = window.db; // Sistema de banco de dados
-        const usuario = db.getUsuario(username);
-
-        // Verificar se o usuário existe
-        if (!usuario) {
-            return {
-                sucesso: false,
-                mensagem: 'Usuário não encontrado'
-            };
+    }
+    
+    /**
+     * Obtém todos os usuários
+     * @returns {Object} Objeto com todos os usuários indexados por username
+     */
+    function getUsuarios() {
+        try {
+            return JSON.parse(localStorage.getItem('orion_usuarios') || '{}');
+        } catch (error) {
+            console.error('Erro ao obter usuários:', error);
+            return {};
         }
-
-        // Fazer hash da senha
-        const senhaHash = db.hashPassword(password);
-
-        // Verificar se a senha está correta
-        if (senhaHash !== usuario.senha_hash) {
-            return {
-                sucesso: false,
-                mensagem: 'Senha incorreta'
-            };
-        }
-
-        // Criar sessão
-        const session = {
-            username: usuario.username,
-            nome: usuario.nome,
-            perfil: usuario.perfil,
-            ultimo_acesso: new Date().toISOString(),
-            expira_em: new Date(Date.now() + this.SESSION_DURATION).toISOString()
-        };
-
-        // Salvar sessão no localStorage
-        localStorage.setItem(this.SESSION_KEY, JSON.stringify(session));
-
-        // Atualizar último acesso do usuário
-        usuario.ultimo_acesso = session.ultimo_acesso;
-        db.adicionarUsuario(usuario);
-
-        return {
-            sucesso: true,
-            usuario: {
+    }
+    
+    /**
+     * Obtém um usuário pelo username
+     * @param {string} username Nome de usuário
+     * @returns {Object|null} Usuário encontrado ou null
+     */
+    function getUsuario(username) {
+        const usuarios = getUsuarios();
+        return usuarios[username] || null;
+    }
+    
+    /**
+     * Realiza login de usuário
+     * @param {string} username Nome de usuário
+     * @param {string} senha Senha em texto puro
+     * @returns {Object} Resultado do login
+     */
+    function login(username, senha) {
+        try {
+            // Obter usuário
+            const usuario = getUsuario(username);
+            
+            // Verificar se usuário existe
+            if (!usuario) {
+                return {
+                    sucesso: false,
+                    mensagem: 'Usuário não encontrado'
+                };
+            }
+            
+            // Verificar senha
+            const senhaHash = hashSenha(senha);
+            
+            if (senhaHash !== usuario.senha_hash) {
+                return {
+                    sucesso: false,
+                    mensagem: 'Senha incorreta'
+                };
+            }
+            
+            // Criar sessão
+            const sessao = {
                 username: usuario.username,
                 nome: usuario.nome,
-                perfil: usuario.perfil
-            }
-        };
-    }
-
-    // Verificar se o usuário está autenticado
-    verificarAutenticacao() {
-        // Obter dados da sessão
-        const sessionData = localStorage.getItem(this.SESSION_KEY);
-        
-        if (!sessionData) {
-            return false;
+                perfil: usuario.perfil,
+                cargo: usuario.cargo,
+                timestamp: new Date().toISOString()
+            };
+            
+            // Salvar sessão
+            sessionStorage.setItem('orion_sessao', JSON.stringify(sessao));
+            sessionStorage.setItem('orion_user_nome', usuario.nome);
+            
+            return {
+                sucesso: true,
+                mensagem: 'Login realizado com sucesso',
+                usuario: {
+                    username: usuario.username,
+                    nome: usuario.nome,
+                    perfil: usuario.perfil,
+                    cargo: usuario.cargo
+                }
+            };
+        } catch (error) {
+            console.error('Erro ao realizar login:', error);
+            return {
+                sucesso: false,
+                mensagem: 'Erro ao realizar login: ' + error.message
+            };
         }
-
+    }
+    
+    /**
+     * Verifica se há um usuário autenticado
+     * @returns {boolean} Verdadeiro se houver um usuário autenticado
+     */
+    function verificarAutenticacao() {
         try {
-            // Converter dados da sessão para objeto
-            const session = JSON.parse(sessionData);
-
-            // Verificar se a sessão expirou
-            const agora = new Date();
-            const expiraEm = new Date(session.expira_em);
-
-            if (agora > expiraEm) {
-                // Sessão expirada, remover dados
-                this.fazerLogout();
+            const sessao = sessionStorage.getItem('orion_sessao');
+            
+            if (!sessao) {
                 return false;
             }
-
-            // Renovar sessão
-            this.renovarSessao();
-
+            
+            // Verificar validade da sessão (opcional)
+            // Por simplicidade, não implementamos expiração de sessão
+            
             return true;
         } catch (error) {
             console.error('Erro ao verificar autenticação:', error);
             return false;
         }
     }
-
-    // Obter dados do usuário atual
-    getUsuarioAtual() {
-        // Verificar se está autenticado
-        if (!this.verificarAutenticacao()) {
-            return null;
-        }
-
-        // Obter dados da sessão
-        const sessionData = localStorage.getItem(this.SESSION_KEY);
-        
-        if (!sessionData) {
-            return null;
-        }
-
+    
+    /**
+     * Obtém dados do usuário atual
+     * @returns {Object|null} Dados do usuário autenticado ou null
+     */
+    function getUsuarioAtual() {
         try {
-            // Converter dados da sessão para objeto
-            const session = JSON.parse(sessionData);
-
-            return {
-                username: session.username,
-                nome: session.nome,
-                perfil: session.perfil
-            };
+            if (!verificarAutenticacao()) {
+                return null;
+            }
+            
+            const sessao = JSON.parse(sessionStorage.getItem('orion_sessao'));
+            return sessao;
         } catch (error) {
             console.error('Erro ao obter usuário atual:', error);
             return null;
         }
     }
-
-    // Renovar sessão
-    renovarSessao() {
-        // Obter dados da sessão
-        const sessionData = localStorage.getItem(this.SESSION_KEY);
-        
-        if (!sessionData) {
+    
+    /**
+     * Verifica se o usuário atual tem uma determinada permissão
+     * @param {string} permissao Permissão a verificar ('admin', 'vendedor', etc)
+     * @returns {boolean} Verdadeiro se o usuário tem a permissão
+     */
+    function verificarPermissao(permissao) {
+        try {
+            const usuario = getUsuarioAtual();
+            
+            if (!usuario) {
+                return false;
+            }
+            
+            // Admin tem todas as permissões
+            if (usuario.perfil === 'admin') {
+                return true;
+            }
+            
+            // Supervisor tem permissões de vendedor
+            if (usuario.perfil === 'supervisor' && permissao === 'vendedor') {
+                return true;
+            }
+            
+            // Verificar permissão específica
+            return usuario.perfil === permissao;
+        } catch (error) {
+            console.error('Erro ao verificar permissão:', error);
             return false;
         }
-
+    }
+    
+    /**
+     * Realiza logout do usuário atual
+     * @returns {boolean} Sucesso da operação
+     */
+    function fazerLogout() {
         try {
-            // Converter dados da sessão para objeto
-            const session = JSON.parse(sessionData);
-
-            // Atualizar data de expiração
-            session.expira_em = new Date(Date.now() + this.SESSION_DURATION).toISOString();
-
-            // Salvar sessão atualizada
-            localStorage.setItem(this.SESSION_KEY, JSON.stringify(session));
-
+            sessionStorage.removeItem('orion_sessao');
+            sessionStorage.removeItem('orion_user_nome');
             return true;
         } catch (error) {
-            console.error('Erro ao renovar sessão:', error);
+            console.error('Erro ao fazer logout:', error);
             return false;
         }
     }
-
-    // Fazer logout
-    fazerLogout() {
-        localStorage.removeItem(this.SESSION_KEY);
-        return true;
-    }
-
-    // Verificar se usuário tem uma permissão específica
-    verificarPermissao(permissao) {
-        // Obter usuário atual
-        const usuario = this.getUsuarioAtual();
-
-        if (!usuario) {
-            return false;
-        }
-
-        // Verificar se é administrador (tem todas as permissões)
-        if (usuario.perfil === 'admin') {
-            return true;
-        }
-
-        // Implementar verificação de permissões específicas conforme necessário
-        // Exemplo: buscar permissões por perfil em um objeto ou banco de dados
-
-        return false;
-    }
-
-    // Alterar senha do usuário
-    alterarSenha(username, senhaAtual, novaSenha) {
-        // Verificar se os dados foram fornecidos
-        if (!username || !senhaAtual || !novaSenha) {
-            return {
-                sucesso: false,
-                mensagem: 'Todos os campos são obrigatórios'
-            };
-        }
-
-        // Obter usuário do banco de dados
-        const db = window.db;
-        const usuario = db.getUsuario(username);
-
-        // Verificar se o usuário existe
-        if (!usuario) {
-            return {
-                sucesso: false,
-                mensagem: 'Usuário não encontrado'
-            };
-        }
-
-        // Fazer hash da senha atual
-        const senhaAtualHash = db.hashPassword(senhaAtual);
-
-        // Verificar se a senha atual está correta
-        if (senhaAtualHash !== usuario.senha_hash) {
-            return {
-                sucesso: false,
-                mensagem: 'Senha atual incorreta'
-            };
-        }
-
-        // Fazer hash da nova senha
-        const novaSenhaHash = db.hashPassword(novaSenha);
-
-        // Atualizar senha do usuário
-        usuario.senha_hash = novaSenhaHash;
-        db.adicionarUsuario(usuario);
-
-        return {
-            sucesso: true,
-            mensagem: 'Senha alterada com sucesso'
-        };
-    }
-}
-
-// Inicialização global
-const auth = new OrionAuth();
+    
+    // Inicializar autenticação
+    inicializarAuth();
+    
+    // Exportar funções públicas
+    return {
+        login,
+        fazerLogout,
+        verificarAutenticacao,
+        getUsuarioAtual,
+        verificarPermissao,
+        getUsuarios,
+        getUsuario,
+        hashSenha
+    };
+    
+})();
